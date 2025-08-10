@@ -32,6 +32,7 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
     let onResolved: (URL) -> Void
     private var attemptedReader = false
     private var didResolve = false
+    private var originalURL: URL?
 
     init(preferReaderMode: Bool, onResolved: @escaping (URL) -> Void) {
         self.preferReaderMode = preferReaderMode
@@ -39,6 +40,7 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
     }
 
     func start(on webView: WKWebView, with originalURL: URL) {
+        self.originalURL = originalURL
         let host = (originalURL.host ?? "").lowercased()
         let isNYT = (host == "www.nytimes.com" || host == "nytimes.com" || host.hasSuffix(".nytimes.com") || host == "nyti.ms")
         if preferReaderMode, isNYT {
@@ -84,24 +86,38 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
         }
 
         if host == "removepaywalls.com" {
-            // Auto click Option 1
+            // Prefer an archive.* link; otherwise force a direct archive.today run with the original URL
             let js = #"""
             (function(){
-              try{
-                var a1 = document.querySelector('a[href*="archive.is/"]') || document.querySelector('a[href*="archive.today/"]');
-                if(a1 && a1.href){ location.href = a1.href; return true; }
+              try {
                 var links = Array.from(document.querySelectorAll('a[href]'));
-                var preferred = links.find(function(a){ return /option\s*1/i.test((a.textContent||'').trim()); }) || links[0];
-                if(preferred && preferred.href){ location.href = preferred.href; return true; }
-              }catch(e){}
-              return false;
+                var archiveLink = links.find(function(a){ return /https?:\/\/archive\.(is|today|ph|md|vn|fo)\//i.test(a.href); });
+                if (archiveLink && archiveLink.href) { location.href = archiveLink.href; return 'clicked-archive'; }
+              } catch(e) {}
+              try {
+                var current = location.href;
+                var orig = current.replace(/^https?:\/\/removepaywalls\.com\//i,'');
+                var target = 'https://archive.today/?run=1&url=' + encodeURIComponent(orig);
+                location.href = target;
+                return 'fallback-archive.today-run';
+              } catch(e) {}
+              return 'no-op';
             })()
             """#
             webView.evaluateJavaScript(js, completionHandler: nil)
             return
         }
 
-        if host.contains("archive.is") || host.contains("archive.today") {
+        if host.contains("archive.is") || host.contains("archive.today") || host.contains("archive.ph") || host.contains("archive.md") || host.contains("archive.vn") || host.contains("archive.fo") {
+            // If we landed on the archive root or submit without a target, drive a run with the original URL
+            let path = currentURL.path
+            let query = currentURL.query ?? ""
+            if (path == "/" && query.isEmpty) || path.lowercased().contains("/submit") && (URLComponents(url: currentURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "url" })?.value?.isEmpty ?? true) {
+                if let original = originalURL, let runURL = URL(string: "https://archive.today/?run=1&url=" + original.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!) {
+                    webView.load(URLRequest(url: runURL))
+                    return
+                }
+            }
             didResolve = true
             onResolved(currentURL)
             return
