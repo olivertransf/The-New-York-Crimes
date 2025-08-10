@@ -38,27 +38,27 @@ struct ContentView: View {
         .fullScreenCover(isPresented: Binding(
             get: { proxyURL != nil },
             set: { if !$0 { proxyURL = nil } }
-        ), onDismiss: { proxyURL = nil }) {
+        ), onDismiss: {
+            // Ensure we clear any intermediate state when the cover is dismissed
+            safariURL = nil
+        }) {
             if let original = proxyURL {
-                // Hidden resolver does all the steps offscreen; once resolved we display a clean WebView
-                BouncingBunnyLoadingView()
-                .padding(40)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    ResolverWebView(originalURL: original, preferReaderMode: true) { resolved in
-                        // If we resolved to archive snapshot and Reader is available, open Safari Reader
-                        safariURL = resolved
-                        proxyURL = nil
-                    }
-                )
+                if let url = safariURL {
+                    SafariView(url: url)
+                } else {
+                    // Hidden resolver does all the steps offscreen; once resolved we swap to SafariView within the same cover
+                    BouncingBunnyLoadingView()
+                        .padding(40)
+                        .background(Color(.secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            ResolverWebView(originalURL: original, preferReaderMode: true) { resolved in
+                                // Switch content to Safari within the same full-screen cover
+                                safariURL = resolved
+                            }
+                        )
+                }
             }
-        }
-        .fullScreenCover(isPresented: Binding(
-            get: { safariURL != nil },
-            set: { if !$0 { safariURL = nil } }
-        )) {
-            if let url = safariURL { SafariView(url: url) }
         }
         #else
         .sheet(isPresented: Binding(
