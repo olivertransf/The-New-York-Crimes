@@ -33,6 +33,8 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
     private var attemptedReader = false
     private var didResolve = false
     private var originalURL: URL?
+    private var timeoutWorkItem: DispatchWorkItem?
+    private var triedArchiveDirect = false
 
     init(preferReaderMode: Bool, onResolved: @escaping (URL) -> Void) {
         self.preferReaderMode = preferReaderMode
@@ -41,16 +43,9 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
 
     func start(on webView: WKWebView, with originalURL: URL) {
         self.originalURL = originalURL
-        let host = (originalURL.host ?? "").lowercased()
-        let isNYT = (host == "www.nytimes.com" || host == "nytimes.com" || host.hasSuffix(".nytimes.com") || host == "nyti.ms")
-        if preferReaderMode, isNYT {
-            if let readerURL = URL(string: "https://r.jina.ai/" + originalURL.absoluteString) {
-                attemptedReader = true
-                webView.load(URLRequest(url: readerURL))
-                return
-            }
-        }
-        // Default start via removepaywalls for direct archival
+        // Start a safety timeout to avoid hanging on iPad
+        startTimeout(on: webView)
+        // Always begin at removepaywalls; we'll resolve to an archive snapshot first
         let abs = originalURL.absoluteString
         if let rp = URL(string: "https://removepaywalls.com/" + abs) {
             webView.load(URLRequest(url: rp))
@@ -75,10 +70,11 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
             webView.evaluateJavaScript(detectBlockJS) { [weak self] result, _ in
                 guard let self else { return }
                 if let isBlocked = result as? Bool, isBlocked {
-                    let rp = URL(string: "https://removepaywalls.com/" + (webView.url?.absoluteString.replacingOccurrences(of: "https://r.jina.ai/", with: "") ?? ""))
-                    if let rp { webView.load(URLRequest(url: rp)) }
+                    // Prefer direct archive candidates instead of removepaywalls to reduce flakiness on iPad
+                    self.loadArchiveCandidates(on: webView)
                 } else {
                     self.didResolve = true
+                    self.cancelTimeout()
                     self.onResolved(currentURL)
                 }
             }
@@ -113,15 +109,94 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
             let path = currentURL.path
             let query = currentURL.query ?? ""
             if (path == "/" && query.isEmpty) || path.lowercased().contains("/submit") && (URLComponents(url: currentURL, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "url" })?.value?.isEmpty ?? true) {
-                if let original = originalURL, let runURL = URL(string: "https://archive.today/?run=1&url=" + original.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!) {
-                    webView.load(URLRequest(url: runURL))
+                loadArchiveCandidates(on: webView)
+                return
+            }
+            // Detect CAPTCHA/blocked content on archive hosts and, on iOS, hand off original URL to Apple's Reader
+            let detectBlockJS = #"""
+            (function(){
+              var t = (document.body && document.body.innerText) || '';
+              if (/403\s*forbidden/i.test(t) || /captcha/i.test(t) || /verify\s*you\s*are\s*human/i.test(t) || /security\s*check/i.test(t)) return true;
+              return false;
+            })()
+            """#
+            webView.evaluateJavaScript(detectBlockJS) { [weak self] result, _ in
+                guard let self else { return }
+                #if os(iOS)
+                if let blocked = result as? Bool, blocked == true, let original = self.originalURL {
+                    self.didResolve = true
+                    self.cancelTimeout()
+                    self.onResolved(original)
                     return
                 }
+                #endif
+                self.didResolve = true
+                self.cancelTimeout()
+                self.onResolved(currentURL)
             }
-            didResolve = true
-            onResolved(currentURL)
             return
         }
+    }
+
+    private func loadArchiveCandidates(on webView: WKWebView) {
+        guard let original = originalURL else { return }
+        if triedArchiveDirect { return }
+        triedArchiveDirect = true
+        // Try endpoints that usually 302 to a concrete snapshot
+        let candidates = [
+            "https://archive.is/latest/" + original.absoluteString,
+            "https://archive.md/oldest/" + original.absoluteString,
+            "https://archive.today/?run=1&url=" + (original.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? original.absoluteString)
+        ]
+        if let first = URL(string: candidates[0]) {
+            webView.load(URLRequest(url: first))
+        } else if let second = URL(string: candidates[1]) {
+            webView.load(URLRequest(url: second))
+        } else if let third = URL(string: candidates[2]) {
+            webView.load(URLRequest(url: third))
+        }
+    }
+
+    private func startTimeout(on webView: WKWebView) {
+        cancelTimeout()
+        let work = DispatchWorkItem { [weak self, weak webView] in
+            guard let self else { return }
+            if self.didResolve { return }
+            // Fallback preference: r.jina.ai -> archive.today run -> original URL
+            if let original = self.originalURL {
+                #if os(iOS)
+                // iOS/iPadOS: avoid r.jina.ai; prefer archive.today run or original
+                if let run = URL(string: "https://archive.today/?run=1&url=" + original.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!) {
+                    self.didResolve = true
+                    self.onResolved(run)
+                    return
+                }
+                self.didResolve = true
+                self.onResolved(original)
+                #else
+                // macOS: allow r.jina.ai as a reader-like fallback
+                if let reader = URL(string: "https://r.jina.ai/" + original.absoluteString) {
+                    self.didResolve = true
+                    self.onResolved(reader)
+                    return
+                }
+                if let run = URL(string: "https://archive.today/?run=1&url=" + original.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!) {
+                    self.didResolve = true
+                    self.onResolved(run)
+                    return
+                }
+                self.didResolve = true
+                self.onResolved(original)
+                #endif
+            }
+        }
+        timeoutWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0, execute: work)
+    }
+
+    private func cancelTimeout() {
+        timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
     }
 }
 

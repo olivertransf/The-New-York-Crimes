@@ -39,6 +39,7 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
     private let onArticleLink: ((URL) -> Void)?
     private let preferReaderMode: Bool
     private var attemptedReaderForURL: URL?
+    weak var boundWebView: WKWebView?
     #if os(iOS)
     private let onRequestOpenInSafariReader: ((URL) -> Void)?
     init(onArticleLink: ((URL) -> Void)?, preferReaderMode: Bool, onRequestOpenInSafariReader: ((URL) -> Void)?) {
@@ -105,7 +106,12 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
         if isNYTArticleURL(url) {
             DispatchQueue.main.async { [weak self, onArticleLink] in
                 guard let self else { return }
-                onArticleLink?(self.proxiedNYTURL(for: url))
+                // Hand off the ORIGINAL article URL; resolver handles reader/removepaywalls/archives
+                onArticleLink?(url)
+                // Navigate the underlying web view back to NYT home in the background
+                if let home = URL(string: "https://www.nytimes.com") {
+                    self.boundWebView?.load(URLRequest(url: home))
+                }
             }
         }
     }
@@ -123,6 +129,10 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
                     guard let self else { return }
                     // Hand off the ORIGINAL article URL; resolver handles reader/removepaywalls/archives
                     onArticleLink?(url)
+                }
+                // Navigate the underlying web view back to NYT home in the background
+                if let home = URL(string: "https://www.nytimes.com") {
+                    webView.load(URLRequest(url: home))
                 }
                 decisionHandler(.cancel)
                 return
@@ -165,6 +175,10 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
                     // Hand off the ORIGINAL article URL; resolver handles reader/removepaywalls/archives
                     onArticleLink?(candidate)
                 }
+                // Navigate the underlying web view back to NYT home in the background
+                if let home = URL(string: "https://www.nytimes.com") {
+                    webView.load(URLRequest(url: home))
+                }
                 decisionHandler(.cancel)
                 return
             }
@@ -194,24 +208,24 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
             return
         }
 
-        // If reader mode is enabled and we landed on archive.* snapshot, re-open via r.jina.ai for cleaner view
+        // If reader mode is enabled and we landed on archive.* snapshot:
+        // - On iOS: request Apple's Safari Reader
+        // - On macOS: fall back to r.jina.ai
         guard preferReaderMode else { return }
-        if let host = currentURL.host?.lowercased(),
-           (host.contains("archive.is") || host.contains("archive.today")) {
-            let alreadyReader = currentURL.absoluteString.hasPrefix("https://r.jina.ai/") || currentURL.absoluteString.hasPrefix("http://r.jina.ai/")
-            if !alreadyReader {
-                if attemptedReaderForURL == currentURL { return }
-                attemptedReaderForURL = currentURL
-                #if os(iOS)
-                onRequestOpenInSafariReader?(currentURL)
-                return
-                #else
+        if let host = currentURL.host?.lowercased(), (host.contains("archive.is") || host.contains("archive.today") || host.contains("archive.ph") || host.contains("archive.md") || host.contains("archive.vn") || host.contains("archive.fo")) {
+            if attemptedReaderForURL == currentURL { return }
+            attemptedReaderForURL = currentURL
+            #if os(iOS)
+            onRequestOpenInSafariReader?(currentURL)
+            return
+            #else
+            if !currentURL.absoluteString.hasPrefix("https://r.jina.ai/") && !currentURL.absoluteString.hasPrefix("http://r.jina.ai/") {
                 if let wrapped = URL(string: "https://r.jina.ai/" + currentURL.absoluteString) {
                     webView.load(URLRequest(url: wrapped))
                     return
                 }
-                #endif
             }
+            #endif
         }
 
         // If r.jina.ai shows a 403/CAPTCHA block, fall back to the underlying URL (e.g., archive snapshot) instead of reader
@@ -317,6 +331,7 @@ struct WebViewRepresentable: UIViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.boundWebView = webView
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         // Use a modern Safari user agent to avoid UA-based blocks (mobile UA on iOS)
@@ -328,19 +343,8 @@ struct WebViewRepresentable: UIViewRepresentable {
             webView.isInspectable = true
         }
         #endif
-        // If reader mode preferred, wrap only NYT hosts via Jina reader; skip intermediaries like removepaywalls/archive
-        var targetURL = url
-        if preferReaderMode, let host = url.host?.lowercased() {
-            let isNYTHost = (host == "www.nytimes.com" || host == "nytimes.com" || host.hasSuffix(".nytimes.com") || host == "nyti.ms")
-            let isAlreadyReader = url.absoluteString.hasPrefix("https://r.jina.ai/") || url.absoluteString.hasPrefix("http://r.jina.ai/")
-            let isIntermediary = (host == "removepaywalls.com" || host.contains("archive.is") || host.contains("archive.today"))
-            if isNYTHost && !isAlreadyReader && !isIntermediary {
-                if let wrapped = URL(string: "https://r.jina.ai/" + url.absoluteString) {
-                    targetURL = wrapped
-                }
-            }
-        }
-        webView.load(URLRequest(url: targetURL))
+        // iOS/iPadOS: do NOT pre-wrap with r.jina.ai; load the original URL.
+        webView.load(URLRequest(url: url))
         return webView
     }
 
@@ -386,6 +390,7 @@ struct WebViewRepresentable: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.boundWebView = webView
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         // Use a modern Safari user agent to avoid UA-based blocks

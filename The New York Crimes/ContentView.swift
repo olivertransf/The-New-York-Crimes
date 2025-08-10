@@ -112,6 +112,20 @@ final class ASPresentationAnchorProvider: NSObject, ASWebAuthenticationPresentat
 // Cute bouncing bunny loading indicator
 struct BouncingBunnyLoadingView: View {
     @State private var isBouncing = false
+    @State private var dadJoke: String = ""
+
+    private static let dadJokes: [String] = [
+        "I used to hate facial hair… but then it grew on me.",
+        "I ordered a chicken and an egg from Amazon. I’ll let you know.",
+        "Why did the scarecrow win an award? He was outstanding in his field.",
+        "I’m reading a book on anti-gravity. It’s impossible to put down!",
+        "I would tell you a joke about construction, but I’m still working on it.",
+        "What do you call fake spaghetti? An impasta.",
+        "Why don’t eggs tell jokes? They’d crack each other up.",
+        "What do you call cheese that isn’t yours? Nacho cheese.",
+        "I don’t trust stairs. They’re always up to something.",
+        "I used to be addicted to soap, but I’m clean now."
+    ]
 
     var body: some View {
         VStack(spacing: 12) {
@@ -138,10 +152,48 @@ struct BouncingBunnyLoadingView: View {
             Text("Loading article…")
                 .font(.headline)
                 .foregroundStyle(.secondary)
+
+            if !dadJoke.isEmpty {
+                Text(dadJoke)
+                    .font(.subheadline)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Dad joke")
+            }
         }
-        .onAppear { isBouncing = true }
+        .onAppear {
+            isBouncing = true
+            // Pick a local placeholder immediately, then try API
+            dadJoke = Self.dadJokes.randomElement() ?? ""
+            Task {
+                if let fetched = await fetchDadJokeOrNil() {
+                    await MainActor.run { dadJoke = fetched }
+                }
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Loading article")
+    }
+
+    // MARK: - Dad Joke API
+    private struct DadJokeResponse: Decodable { let joke: String }
+    private func fetchDadJokeOrNil() async -> String? {
+        do {
+            var request = URLRequest(url: URL(string: "https://icanhazdadjoke.com/")!)
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue("The New York Crimes (dadjokes)", forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                let decoded = try JSONDecoder().decode(DadJokeResponse.self, from: data)
+                let trimmed = decoded.joke.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+        } catch {
+            // Silent fallback to local list
+        }
+        return nil
     }
 }
 
