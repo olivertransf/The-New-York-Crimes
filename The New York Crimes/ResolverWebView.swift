@@ -63,7 +63,7 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
             let detectBlockJS = #"""
             (function(){
               var t = (document.body && document.body.innerText) || '';
-              if (/403\s*forbidden/i.test(t) || /Warning:\s*Target URL returned error\s*403/i.test(t) || /CAPTCHA/i.test(t)) return true;
+              if (/403\\s*forbidden/i.test(t) || /Warning:\\s*Target URL returned error\\s*403/i.test(t) || /CAPTCHA/i.test(t)) return true;
               return false;
             })()
             """#
@@ -116,7 +116,7 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
             let detectBlockJS = #"""
             (function(){
               var t = (document.body && document.body.innerText) || '';
-              if (/403\s*forbidden/i.test(t) || /captcha/i.test(t) || /verify\s*you\s*are\s*human/i.test(t) || /security\s*check/i.test(t)) return true;
+              if (/403\\s*forbidden/i.test(t) || /captcha/i.test(t) || /verify\\s*you\\s*are\\s*human/i.test(t) || /security\\s*check/i.test(t)) return true;
               return false;
             })()
             """#
@@ -159,7 +159,7 @@ final class ResolverCoordinator: NSObject, WKNavigationDelegate {
 
     private func startTimeout(on webView: WKWebView) {
         cancelTimeout()
-        let work = DispatchWorkItem { [weak self, weak webView] in
+        let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             if self.didResolve { return }
             // Fallback preference: r.jina.ai -> archive.today run -> original URL

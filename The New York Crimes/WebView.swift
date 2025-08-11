@@ -11,9 +11,220 @@ import WebKit
 import AppKit
 #endif
 
+// MARK: - Ad Blocker Script for NYT
+private let nytAdBlockerScript = """
+(function() {
+    'use strict';
+    
+    // Only run on NYT domains
+    if (!window.location.hostname.includes('nytimes.com')) return;
+    
+    // Function to handle ad elements
+    function blockNYTAds() {
+        // Conservative ad blocking - only target very specific ad elements
+        const safeAdSelectors = [
+            // Only very specific ad containers that won't catch header
+            'div[id="google_ads"]',
+            'div[id="ad-container"]',
+            'div[class="ad-container"]',
+            'div[id="advertisement"]',
+            'div[class="advertisement"]',
+            
+            // Specific ad iframes
+            'iframe[src*="doubleclick.net"]',
+            'iframe[src*="googlesyndication.com"]',
+            'iframe[src*="googleadservices.com"]',
+            'iframe[src*="adnxs.com"]',
+            
+            // Specific ad scripts
+            'script[src*="googletagmanager.com"]',
+            'script[src*="google-analytics.com"]',
+            'script[src*="doubleclick.net"]'
+        ];
+        
+        // Hide ad elements
+        safeAdSelectors.forEach(selector => {
+            try {
+                const ads = document.querySelectorAll(selector);
+                ads.forEach(ad => {
+                    if (ad && !ad.dataset.adBlocked) {
+                        ad.style.display = 'none';
+                        ad.dataset.adBlocked = 'true';
+                    }
+                });
+            } catch (e) {}
+        });
+        
+        // Remove ad elements completely
+        safeAdSelectors.forEach(selector => {
+            try {
+                const ads = document.querySelectorAll(selector);
+                ads.forEach(ad => {
+                    if (ad && !ad.dataset.adRemoved) {
+                        ad.remove();
+                        ad.dataset.adRemoved = 'true';
+                    }
+                });
+            } catch (e) {}
+        });
+        
+        // Close ad pop-ups (only very specific ones)
+        const closeSelectors = ['.ad-close', '.dismiss-ad', '[aria-label="Close ad"]'];
+        closeSelectors.forEach(selector => {
+            try {
+                const closeButtons = document.querySelectorAll(selector);
+                closeButtons.forEach(button => {
+                    if (button && button.offsetParent !== null) {
+                        button.click();
+                    }
+                });
+            } catch (e) {}
+        });
+        
+        // Remove empty advertisement containers (very targeted approach)
+        function removeEmptyAdContainers() {
+            try {
+                // Look for elements that contain only "advertisement" text and are likely empty
+                const adTextElements = document.querySelectorAll('div, section, aside');
+                let removedCount = 0;
+                
+                adTextElements.forEach(element => {
+                    if (element && !element.dataset.emptyAdChecked) {
+                        element.dataset.emptyAdChecked = 'true';
+                        
+                        const text = element.textContent || '';
+                        const trimmedText = text.trim();
+                        
+                        // More aggressive filtering - look for various ad-related text patterns
+                        const hasAdText = /advertisement|advertising|ad\\s*label|ad\\s*text|sponsored|promoted/i.test(trimmedText);
+                        const isMinimalContent = trimmedText.length < 50; // Slightly more lenient
+                        const isMainSiteElement = element.closest('header') || 
+                                                element.closest('nav') || 
+                                                element.closest('[data-testid*="header"]') ||
+                                                element.closest('[data-testid*="navigation"]') ||
+                                                element.closest('[class*="logo"]') ||
+                                                element.closest('[class*="brand"]') ||
+                                                element.closest('[class*="site"]');
+                        
+                        // Also check if element has ad-related classes/IDs
+                        const hasAdClasses = element.className && /ad|banner|promo|sponsor/i.test(element.className);
+                        const hasAdIds = element.id && /ad|banner|promo|sponsor/i.test(element.id);
+                        
+                        if (hasAdText && (isMinimalContent || hasAdClasses || hasAdIds) && !isMainSiteElement) {
+                            element.remove();
+                            removedCount++;
+                        }
+                    }
+                });
+                
+                // If we found and removed elements, log it (for debugging)
+                if (removedCount > 0) {
+                    console.log(`Removed ${removedCount} empty ad containers`);
+                }
+            } catch (e) {
+                console.error('Error in removeEmptyAdContainers:', e);
+            }
+        }
+        
+        // Run the empty container removal
+        removeEmptyAdContainers();
+        
+        // Additional direct removal of advertisement text elements
+        function removeAdvertisementText() {
+            try {
+                // Look for elements that are clearly just advertisement labels
+                const adLabelSelectors = [
+                    'div[class*="ad-label"]',
+                    'div[id*="ad-label"]',
+                    'div[class*="advertisement"]',
+                    'div[id*="advertisement"]',
+                    'section[class*="advertisement"]',
+                    'section[id*="advertisement"]',
+                    'aside[class*="advertisement"]',
+                    'aside[id*="advertisement"]'
+                ];
+                
+                adLabelSelectors.forEach(selector => {
+                    try {
+                        const elements = document.querySelectorAll(selector);
+                        elements.forEach(element => {
+                            if (element && !element.dataset.adLabelRemoved) {
+                                // Double-check it's not part of main site structure
+                                const isMainSiteElement = element.closest('header') || 
+                                                        element.closest('nav') || 
+                                                        element.closest('[data-testid*="header"]') ||
+                                                        element.closest('[data-testid*="navigation"]');
+                                
+                                if (!isMainSiteElement) {
+                                    element.remove();
+                                    element.dataset.adLabelRemoved = 'true';
+                                }
+                            }
+                        });
+                    } catch (e) {}
+                });
+                
+                // Also look for elements with just "advertisement" text
+                const allElements = document.querySelectorAll('*');
+                allElements.forEach(element => {
+                    if (element && !element.dataset.adTextRemoved) {
+                        const text = element.textContent || '';
+                        const trimmedText = text.trim();
+                        
+                        // If element contains only advertisement text and is small
+                        if (trimmedText.toLowerCase() === 'advertisement' && 
+                            trimmedText.length < 20 && 
+                            !element.closest('header') && 
+                            !element.closest('nav')) {
+                            element.remove();
+                            element.dataset.adTextRemoved = 'true';
+                        }
+                    }
+                });
+            } catch (e) {
+                console.error('Error in removeAdvertisementText:', e);
+            }
+        }
+        
+        // Run the additional advertisement text removal
+        removeAdvertisementText();
+    }
+    
+    // Check for ads every 1 second
+    setInterval(blockNYTAds, 1000);
+    
+    // Observe DOM changes to catch dynamically loaded ads
+    const observer = new MutationObserver(mutations => {
+        mutations.forEach(() => blockNYTAds());
+    });
+    
+    observer.observe(document.body, { childList: true, subtree: true });
+    
+    // Initial handling
+    blockNYTAds();
+})();
+"""
+
+// MARK: - Script Injection Helper
+private func addAdBlockerScriptToPageWorld(controller: WKUserContentController) {
+    if #available(iOS 14.0, macOS 11.0, *) {
+        let script = WKUserScript(
+            source: nytAdBlockerScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+            in: .page
+        )
+        controller.addUserScript(script)
+    } else {
+        let script = WKUserScript(source: nytAdBlockerScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        controller.addUserScript(script)
+    }
+}
+
 struct WebView: View {
     let url: URL
     var onArticleLink: ((URL) -> Void)? = nil
+    var preferDarkMode: Bool = false
     var pageZoom: CGFloat = 1.0
     var preferMobileUserAgent: Bool = false
     var preferReaderMode: Bool = false
@@ -28,7 +239,8 @@ struct WebView: View {
             pageZoom: pageZoom,
             preferMobileUserAgent: preferMobileUserAgent,
             preferReaderMode: preferReaderMode,
-            onRequestOpenInSafariReader: onRequestOpenInSafariReader
+            onRequestOpenInSafariReader: onRequestOpenInSafariReader,
+            preferDarkMode: preferDarkMode
         )
         .ignoresSafeArea()
     }
@@ -235,7 +447,7 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
             let detectBlockJS = #"""
             (function(){
               var t = (document.body && document.body.innerText) || '';
-              if (/403\s*forbidden/i.test(t) || /Warning:\s*Target URL returned error\s*403/i.test(t) || /CAPTCHA/i.test(t)) return true;
+              if (/403\\s*forbidden/i.test(t) || /Warning:\\s*Target URL returned error\\s*403/i.test(t) || /CAPTCHA/i.test(t)) return true;
               return false;
             })()
             """#
@@ -302,6 +514,7 @@ struct WebViewRepresentable: UIViewRepresentable {
     let preferMobileUserAgent: Bool
     let preferReaderMode: Bool
     let onRequestOpenInSafariReader: ((URL) -> Void)?
+    let preferDarkMode: Bool
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -329,27 +542,132 @@ struct WebViewRepresentable: UIViewRepresentable {
         let script = WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
         userContent.addUserScript(script)
 
+        // Inject ad blocking script for NYT
+        addAdBlockerScriptToPageWorld(controller: userContent)
+        
+        // Dark mode: inject your new simple NYT dark CSS
+        let initialHost = url.host?.lowercased() ?? ""
+        let initialIsNYT = initialHost == "nytimes.com" || initialHost.hasSuffix(".nytimes.com")
+        if initialIsNYT {
+            let nytDarkSimple = #"""
+            (function(){
+              try{
+                if (%@) {
+                  var s = document.getElementById('nyt-dark-simple');
+                  if(!s){
+                    s = document.createElement('style');
+                    s.id = 'nyt-dark-simple';
+                    s.textContent = [
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z], svg, a > img) {",
+                      "  filter: invert(1) hue-rotate(180deg) !important;",
+                      "}",
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z]) {",
+                      "  background-color: inherit !important;",
+                      "}"
+                    ].join('\n');
+                    (document.head||document.documentElement).appendChild(s);
+                  }
+                } else {
+                  var r = document.getElementById('nyt-dark-simple');
+                  if(r) r.remove();
+                }
+              }catch(e){}
+            })();
+            """#.replacingOccurrences(of: "%@", with: preferDarkMode ? "true" : "false")
+            userContent.addUserScript(WKUserScript(source: nytDarkSimple, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+        }
+
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         context.coordinator.boundWebView = webView
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
-        // Use a modern Safari user agent to avoid UA-based blocks (mobile UA on iOS)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/605.1.15"
-        // Increase readability if requested
-        webView.pageZoom = pageZoom
-        #if DEBUG
-        if #available(iOS 16.4, *) {
-            webView.isInspectable = true
+        
+        // Force dark only for NYT pages; leave others to their native theme
+        if #available(iOS 13.0, *) {
+            let initialHost = url.host?.lowercased() ?? ""
+            let initialIsNYT = initialHost == "nytimes.com" || initialHost.hasSuffix(".nytimes.com")
+            webView.overrideUserInterfaceStyle = (preferDarkMode && initialIsNYT) ? .dark : .unspecified
         }
-        #endif
-        // iOS/iPadOS: do NOT pre-wrap with r.jina.ai; load the original URL.
+        
         webView.load(URLRequest(url: url))
         return webView
     }
-
+    
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        // No-op. If you want to navigate to a new URL, pass a new `url`.
+        // React to dark mode toggle without recreating the web view
+        if #available(iOS 13.0, *) {
+            let currentHost = uiView.url?.host?.lowercased() ?? ""
+            let isNYT = currentHost == "nytimes.com" || currentHost.hasSuffix(".nytimes.com")
+            uiView.overrideUserInterfaceStyle = (preferDarkMode && isNYT) ? .dark : .unspecified
+        }
+        
+        // Ensure future navigations get the right injection set
+        let userContent = uiView.configuration.userContentController
+        userContent.removeAllUserScripts()
+        // Re-add the ad blocker script
+        addAdBlockerScriptToPageWorld(controller: userContent)
+        // Re-add NYT simple dark CSS injector
+        let currentHost = uiView.url?.host?.lowercased() ?? ""
+        let isNYT = currentHost == "nytimes.com" || currentHost.hasSuffix(".nytimes.com")
+        if isNYT {
+            let nytDarkSimple = #"""
+            (function(){
+              try{
+                if (%@) {
+                  var s = document.getElementById('nyt-dark-simple');
+                  if(!s){
+                    s = document.createElement('style');
+                    s.id = 'nyt-dark-simple';
+                    s.textContent = [
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z], svg, a > img) {",
+                      "  filter: invert(1) hue-rotate(180deg) !important;",
+                      "}",
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z]) {",
+                      "  background-color: inherit !important;",
+                      "}"
+                    ].join('\n');
+                    (document.head||document.documentElement).appendChild(s);
+                  }
+                } else {
+                  var r = document.getElementById('nyt-dark-simple'); if(r) r.remove();
+                }
+              }catch(e){}
+            })();
+            """#.replacingOccurrences(of: "%@", with: preferDarkMode ? "true" : "false")
+            userContent.addUserScript(WKUserScript(source: nytDarkSimple, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+        }
+        // Live toggle: set or remove the [dark] attribute and localStorage flag
+        if isNYT {
+            let toggleJS = preferDarkMode ? "try{localStorage.darkMode='true';document.documentElement.setAttribute('dark','');}catch(e){}" : "try{localStorage.darkMode='false';document.documentElement.removeAttribute('dark');}catch(e){}"
+            uiView.evaluateJavaScript(toggleJS, completionHandler: nil)
+            let applySimple = #"""
+            (function(){
+              try{
+                if (%@) {
+                  var s = document.getElementById('nyt-dark-simple');
+                  if(!s){
+                    s = document.createElement('style');
+                    s.id = 'nyt-dark-simple';
+                    s.textContent = [
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z], svg, a > img) {",
+                      "  filter: invert(1) hue-rotate(180deg) !important;",
+                      "}",
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z]) {",
+                      "  background-color: inherit !important;",
+                      "}"
+                    ].join('\n');
+                    (document.head||document.documentElement).appendChild(s);
+                  }
+                } else {
+                  var r=document.getElementById('nyt-dark-simple'); if(r) r.remove();
+                }
+              }catch(e){}
+            })();
+            """#.replacingOccurrences(of: "%@", with: preferDarkMode ? "true" : "false")
+            uiView.evaluateJavaScript(applySimple, completionHandler: nil)
+        }
     }
 
     func makeCoordinator() -> WebViewCoordinator { WebViewCoordinator(onArticleLink: onArticleLink, preferReaderMode: preferReaderMode, onRequestOpenInSafariReader: onRequestOpenInSafariReader) }
@@ -363,6 +681,7 @@ struct WebViewRepresentable: NSViewRepresentable {
     let preferMobileUserAgent: Bool
     let preferReaderMode: Bool
     let onRequestOpenInSafariReader: ((URL) -> Void)? = nil
+    let preferDarkMode: Bool
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -388,42 +707,126 @@ struct WebViewRepresentable: NSViewRepresentable {
         let script = WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
         userContent.addUserScript(script)
 
+        // Inject ad blocking script for NYT
+        addAdBlockerScriptToPageWorld(controller: userContent)
+        
+        // Dark mode: inject your new simple NYT dark CSS
+        let initialHost = url.host?.lowercased() ?? ""
+        let initialIsNYT = initialHost == "nytimes.com" || initialHost.hasSuffix(".nytimes.com")
+        if initialIsNYT {
+            let nytDarkSimple = #"""
+            (function(){
+              try{
+                if (%@) {
+                  var s = document.getElementById('nyt-dark-simple');
+                  if(!s){
+                    s = document.createElement('style');
+                    s.id = 'nyt-dark-simple';
+                    s.textContent = [
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z], svg, a > img) {",
+                      "  filter: invert(1) hue-rotate(180deg) !important;",
+                      "}",
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z]) {",
+                      "  background-color: inherit !important;",
+                      "}"
+                    ].join('\n');
+                    (document.head||document.documentElement).appendChild(s);
+                  }
+                } else {
+                  var r = document.getElementById('nyt-dark-simple'); if(r) r.remove();
+                }
+              }catch(e){}
+            })();
+            """#.replacingOccurrences(of: "%@", with: preferDarkMode ? "true" : "false")
+            userContent.addUserScript(WKUserScript(source: nytDarkSimple, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+        }
+
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         context.coordinator.boundWebView = webView
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
-        // Use a modern Safari user agent to avoid UA-based blocks
-        if preferMobileUserAgent {
-            webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/605.1.15"
-        } else {
-            webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
-        }
-        // Increase readability if requested
-        webView.pageZoom = pageZoom
-        #if DEBUG
-        if #available(macOS 13.3, *) {
-            webView.isInspectable = true
-        }
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
+        
+        #if os(macOS)
+        // Force dark only for NYT pages; leave others to their native theme
+        let initialHost = url.host?.lowercased() ?? ""
+        let initialIsNYT = initialHost == "nytimes.com" || initialHost.hasSuffix(".nytimes.com")
+        webView.appearance = (preferDarkMode && initialIsNYT) ? NSAppearance(named: .darkAqua) : nil
         #endif
-        // If reader mode preferred, wrap only NYT hosts via Jina reader; skip intermediaries like removepaywalls/archive
-        var targetURL = url
-        if preferReaderMode, let host = url.host?.lowercased() {
-            let isNYTHost = (host == "www.nytimes.com" || host == "nytimes.com" || host.hasSuffix(".nytimes.com") || host == "nyti.ms")
-            let isAlreadyReader = url.absoluteString.hasPrefix("https://r.jina.ai/") || url.absoluteString.hasPrefix("http://r.jina.ai/")
-            let isIntermediary = (host == "removepaywalls.com" || host.contains("archive.is") || host.contains("archive.today"))
-            if isNYTHost && !isAlreadyReader && !isIntermediary {
-                if let wrapped = URL(string: "https://r.jina.ai/" + url.absoluteString) {
-                    targetURL = wrapped
-                }
-            }
-        }
-        webView.load(URLRequest(url: targetURL))
+        
+        webView.load(URLRequest(url: url))
         return webView
     }
-
+    
     func updateNSView(_ nsView: WKWebView, context: Context) {
-        // No-op
+        // Toggle appearance only for NYT pages; reset to nil for others
+        let currentHost = nsView.url?.host?.lowercased() ?? ""
+        let isNYT = currentHost == "nytimes.com" || currentHost.hasSuffix(".nytimes.com")
+        nsView.appearance = (preferDarkMode && isNYT) ? NSAppearance(named: .darkAqua) : nil
+
+        // Ensure future navigations get the right injection set
+        let userContent = nsView.configuration.userContentController
+        userContent.removeAllUserScripts()
+        // Re-add the ad blocker script
+        addAdBlockerScriptToPageWorld(controller: userContent)
+        // Re-add NYT simple dark CSS injector
+        if isNYT {
+            let nytDarkSimple = #"""
+            (function(){
+              try{
+                if (%@) {
+                  var s = document.getElementById('nyt-dark-simple');
+                  if(!s){
+                    s = document.createElement('style');
+                    s.id = 'nyt-dark-simple';
+                    s.textContent = [
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z], svg, a > img) {",
+                      "  filter: invert(1) hue-rotate(180deg) !important;",
+                      "}",
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z]) {",
+                      "  background-color: inherit !important;",
+                      "}"
+                    ].join('\n');
+                    (document.head||document.documentElement).appendChild(s);
+                  }
+                } else {
+                  var r = document.getElementById('nyt-dark-simple'); if(r) r.remove();
+                }
+              }catch(e){}
+            })();
+            """#.replacingOccurrences(of: "%@", with: preferDarkMode ? "true" : "false")
+            userContent.addUserScript(WKUserScript(source: nytDarkSimple, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+            // Live toggle
+            let toggleJS = preferDarkMode ? "try{localStorage.darkMode='true';document.documentElement.setAttribute('dark','');}catch(e){}" : "try{localStorage.darkMode='false';document.documentElement.removeAttribute('dark');}catch(e){}"
+            nsView.evaluateJavaScript(toggleJS, completionHandler: nil)
+            // Apply/remove simple style immediately
+            let applySimple = #"""
+            (function(){
+              try{
+                if (%@) {
+                  var s = document.getElementById('nyt-dark-simple');
+                  if(!s){
+                    s = document.createElement('style');
+                    s.id = 'nyt-dark-simple';
+                    s.textContent = [
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z], svg, a > img) {",
+                      "  filter: invert(1) hue-rotate(180deg) !important;",
+                      "}",
+                      ":is(html:not([stylus-iframe]), img, svg, video):not(z#z.z[z]) {",
+                      "  background-color: inherit !important;",
+                      "}"
+                    ].join('\n');
+                    (document.head||document.documentElement).appendChild(s);
+                  }
+                } else {
+                  var r=document.getElementById('nyt-dark-simple'); if(r) r.remove();
+                }
+              }catch(e){}
+            })();
+            """#.replacingOccurrences(of: "%@", with: preferDarkMode ? "true" : "false")
+            nsView.evaluateJavaScript(applySimple, completionHandler: nil)
+        }
     }
 
     func makeCoordinator() -> WebViewCoordinator { WebViewCoordinator(onArticleLink: onArticleLink, preferReaderMode: preferReaderMode) }
